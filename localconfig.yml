@@ -1,0 +1,9 @@
+port: 6662
+host: 127.0.0.1
+openai_key:
+- sk-nsAxVtSmV0I46nNcnNx7T3BlbkFJwH5eQwkw3Kjamk1111
+bs_model:
+  self-driving-v1: ['http://127.0.0.1:8089/api/v1']
+max_pending: 30
+mongo_uri: mongodb://admin:admin@127.0.0.1:27017
+sensitive: ./sensitive.csv

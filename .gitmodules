@@ -1,0 +1,3 @@
+[submodule "api-for-open-llm"]
+	path = api-for-open-llm
+	url = https://github.com/xusenlinzy/api-for-open-llm
