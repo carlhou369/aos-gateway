@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sashabaranov/go-openai"
 )
 
 const MaxMsgLogLength = 20
@@ -18,6 +19,12 @@ const MaxTimeOut = 180
 
 var CheckMsgLogDuration = time.Minute * 2
 var MaxConversactionSuspend = 60 * 60
+
+const RateLimitAnswer = "AI模型正忙，请稍后重试"
+
+const SystemRole = "system"
+const UserRole = "user"
+const AnswerRole = "assistant"
 
 const (
 	ModelDown int = iota
@@ -69,17 +76,9 @@ func (c *Client) checkHealth() {
 	}
 }
 
-func (c *Client) buildPromt(q *common.Question) BSRequest {
-	maxLength := MaxPromtLength
-	if q.Model == "self-driving-v3" {
-		maxLength = maxLength * 10
-	}
-	promtHistoryLen := 0
-	promt := BSRequest{
-		Content: q.Message,
-		History: [][]string{},
-		//TODO: add model name
-	}
+func (c *Client) buildPromt(q *common.Question) []openai.ChatCompletionMessage {
+	promtLen := 0
+	promt := []openai.ChatCompletionMessage{}
 	conversationFrom := time.Now().Unix() - int64(MaxConversactionSuspend)
 	msgLog, err := db.GetResentConversation(q.ConversationId, conversationFrom)
 	if err != nil {
@@ -88,19 +87,31 @@ func (c *Client) buildPromt(q *common.Question) BSRequest {
 	if err == nil {
 		for i := len(msgLog) - 1; i >= 0; i-- {
 			msg := msgLog[i]
-			promt.History = append(promt.History, []string{msg.Prompt, msg.Text})
-			promtHistoryLen = promtHistoryLen + len(msg.Prompt) + len(msg.Text)
+			userMsg := openai.ChatCompletionMessage{
+				Role:    UserRole,
+				Content: msg.Prompt,
+			}
+			apiMsg := openai.ChatCompletionMessage{
+				Role:    AnswerRole,
+				Content: msg.Text,
+			}
+			promtLen = promtLen + len(msg.Prompt) + len(msg.Text)
+			promt = append(promt, userMsg, apiMsg)
 			//pop early msgs if promt over length
-			for promtHistoryLen > maxLength {
-				if len(promt.History) <= 1 {
+			for promtLen > MaxPromtLength {
+				if len(promt) <= 2 {
 					break
 				}
-				shortLen := len(promt.History[0][0]) + len(promt.History[0][1])
-				promtHistoryLen = promtHistoryLen - shortLen
-				promt.History = promt.History[1:]
+				shortLen := len(promt[0].Content) + len(promt[1].Content)
+				promtLen = promtLen - shortLen
+				promt = promt[2:]
 			}
 		}
 	}
+	promt = append(promt, openai.ChatCompletionMessage{
+		Role:    UserRole,
+		Content: q.Message,
+	})
 	return promt
 }
 
@@ -111,12 +122,25 @@ func (c *Client) GetAnswer(ctx context.Context, q common.Question) (*common.QA, 
 	}()
 	prompt := c.buildPromt(&q)
 	log.Debug("self driving model", q.Model, "prompt:\n", fmt.Sprintf("%v", prompt))
-	promptData, err := json.Marshal(&prompt)
+	req := openai.ChatCompletionRequest{
+		Model:       q.Model,
+		Messages:    prompt,
+		Temperature: 0,
+		TopP:        0,
+		N:           0,
+		Stream:      false,
+		User:        UserRole,
+	}
+	promptData, err := json.Marshal(&req)
 	if err != nil {
 		log.Info(err.Error())
 		return nil, err
 	}
-	resp, err := common.HttpPost(c.Url, string(promptData), MaxTimeOut, map[string]string{})
+	resp, err := common.HttpPost(c.Url, string(promptData), MaxTimeOut, map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "",
+	})
+
 	if err != nil {
 		log.Info(err.Error())
 		return nil, err
@@ -140,3 +164,38 @@ func (c *Client) GetAnswer(ctx context.Context, q common.Question) (*common.QA, 
 	}
 	return &qa, nil
 }
+
+// func (c *Client) buildPromt(q *common.Question) BSRequest {
+// 	maxLength := MaxPromtLength
+// 	if q.Model == "self-driving-v3" {
+// 		maxLength = maxLength * 10
+// 	}
+// 	promtHistoryLen := 0
+// 	promt := BSRequest{
+// 		Content: q.Message,
+// 		History: [][]string{},
+// 		//TODO: add model name
+// 	}
+// 	conversationFrom := time.Now().Unix() - int64(MaxConversactionSuspend)
+// 	msgLog, err := db.GetResentConversation(q.ConversationId, conversationFrom)
+// 	if err != nil {
+// 		log.Warn("GetResentConversation conversationid", q.ConversationId, "from timestamp", conversationFrom, "error", err)
+// 	}
+// 	if err == nil {
+// 		for i := len(msgLog) - 1; i >= 0; i-- {
+// 			msg := msgLog[i]
+// 			promt.History = append(promt.History, []string{msg.Prompt, msg.Text})
+// 			promtHistoryLen = promtHistoryLen + len(msg.Prompt) + len(msg.Text)
+// 			//pop early msgs if promt over length
+// 			for promtHistoryLen > maxLength {
+// 				if len(promt.History) <= 1 {
+// 					break
+// 				}
+// 				shortLen := len(promt.History[0][0]) + len(promt.History[0][1])
+// 				promtHistoryLen = promtHistoryLen - shortLen
+// 				promt.History = promt.History[1:]
+// 			}
+// 		}
+// 	}
+// 	return promt
+// }

@@ -189,6 +189,7 @@ func (c *Service) Start(ctx context.Context) error {
 	})
 	r.POST("/api/fake", c.HandleFake)
 	r.POST("/api/question", c.HandleQuestion)
+	r.POST("/api/register", c.HandleRegister)
 	r.GET("/api/refresh", func(c *gin.Context) {
 		defer func() {
 			c.String(http.StatusOK, "success")
