@@ -1,4 +1,6 @@
-# gateway
+# Gateway
+
+gateway为模型推理网关，下连多个执行模型计算的model worker。可以在启动时配置model worker，worker也可以调用gateway接口注册加入。gateway将用户问题拼装成prompt下发到空闲worker执行并返回，保存对话历史，支持基于上下文聊天。
 
 # Deploy
 ## model worker
@@ -26,8 +28,6 @@ bs_model为支持的模型和模型worker的url。例如下面配置中模型名
 bs_model:
   self-driving-v1: ['http://127.0.0.1:8089/api/v1']
 ```
-
-
 
 ### 启动
 
