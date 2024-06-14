@@ -1,8 +1,8 @@
 # gateway
 
 # Deploy
-## model server
-模型服务需要支持openai接口，可以使用fastchat或api-for-open-llm等库启动。
+## model worker
+worker目前需支持openai接口，可以使用fastchat或api-for-open-llm等库启动。
 参考：
 1. https://github.com/xusenlinzy/api-for-open-llm/blob/master/docs/SCRIPT.md
 2. https://github.com/lm-sys/FastChat/blob/main/docs/openai_api.md
@@ -41,7 +41,7 @@ bs_model:
 
 # API
 
-## 请求模型
+## 模型对话
 **/api/question**
 
 message_id唯一标识一轮对话，conversation_id唯一标识连续对话。message为llm请求问题。
@@ -69,7 +69,7 @@ message_id唯一标识一轮对话，conversation_id唯一标识连续对话。m
 }
 ```
 
-## 模型worker加入
+## 模型worker加入gateway
 
 **/api/register**
 
