@@ -107,11 +107,11 @@ func InitRpcService(port string, relays []string, maxPendingLength int, bsModelC
 			RpcServer.gptApiClients[apiKey] = chatapi.NewClient(apiKey, context.Background())
 		}
 		for modelName, urls := range bsModelConfig {
+			if RpcServer.bsApiClient[modelName] == nil {
+				RpcServer.bsApiClient[modelName] = make([]*selfdriving.Client, 0)
+			}
 			for _, url := range urls {
 				log.Info("init model name:", modelName, "url:", url)
-				if RpcServer.bsApiClient[modelName] == nil {
-					RpcServer.bsApiClient[modelName] = make([]*selfdriving.Client, 0)
-				}
 				RpcServer.bsApiClient[modelName] = append(RpcServer.bsApiClient[modelName], selfdriving.NewClient(url, modelName, context.Background()))
 			}
 		}
@@ -216,6 +216,13 @@ type Resp struct {
 	ResultBody interface{} `json:"data"`
 }
 
+type QuestionReq struct {
+	Message        string `json:"message"`
+	MessageId      string `json:"message_id"`
+	ConversationId string `json:"conversation_id"`
+	Model          string `json:"model"`
+}
+
 func (s *Service) HandleQuestion(c *gin.Context) {
 	sess := sessions.Default(c)
 	rep := Resp{
@@ -230,9 +237,10 @@ func (s *Service) HandleQuestion(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, rep)
 		}
 	}()
-
+	req := QuestionReq{}
+	c.BindJSON(&req)
 	//get session state
-	msg := c.PostForm("message")
+	msg := req.Message
 	if msg == "" {
 		log.Debug("no message")
 		return
@@ -253,14 +261,14 @@ func (s *Service) HandleQuestion(c *gin.Context) {
 		log.Info("session id delete", session_id)
 		return
 	}
-	msg_id := c.PostForm("messageId")
-	conv_id := c.PostForm("conversationId")
-	modelName := c.PostForm("model")
+	msg_id := req.MessageId
+	conv_id := req.ConversationId
+	modelName := req.Model
 	s.bsClientMut.RLock()
 	defer s.bsClientMut.RUnlock()
 	if _, ok := s.bsApiClient[modelName]; !ok {
 		if modelName != "" {
-			rep.ResultMsg = "model name not correct"
+			rep.ResultMsg = fmt.Sprintf("model %s not supported", modelName)
 			return
 		}
 		modelName = "gpt"
@@ -374,6 +382,11 @@ func (s *Service) HandleQuestion(c *gin.Context) {
 	}
 }
 
+type WorkerRegReq struct {
+	Model string `json:"model"`
+	Url   string `json:"url"`
+}
+
 func (s *Service) HandleRegister(c *gin.Context) {
 	rep := Resp{
 		ResultCode: 200,
@@ -387,8 +400,10 @@ func (s *Service) HandleRegister(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, rep)
 		}
 	}()
-	model := c.PostForm("model")
-	url := c.PostForm("url")
+	req := WorkerRegReq{}
+	c.BindJSON(&req)
+	model := req.Model
+	url := req.Url
 	s.bsClientMut.Lock()
 	defer s.bsClientMut.Unlock()
 	if _, ok := s.bsApiClient[model]; !ok {

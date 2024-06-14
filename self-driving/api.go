@@ -3,6 +3,7 @@ package selfdriving
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"gateway/common"
 	"gateway/db"
@@ -64,7 +65,8 @@ func NewClient(url, modelName string, ctx context.Context) *Client {
 
 func (c *Client) checkHealth() {
 	for {
-		_, err := common.HttpPost(c.Url+"/health", "", 10, nil)
+		// _, err := common.HttpPost(c.Url+"/health", "", 10, nil)
+		var err error
 		if err != nil {
 			c.Status = ModelDown
 		} else {
@@ -142,22 +144,25 @@ func (c *Client) GetAnswer(ctx context.Context, q common.Question) (*common.QA, 
 	})
 
 	if err != nil {
-		log.Info(err.Error())
+		log.Warn(err.Error())
 		return nil, err
 	}
-	var bsResp BSResponse
+	var bsResp openai.ChatCompletionResponse
 	err = json.Unmarshal(resp, &bsResp)
 	if err != nil {
-		log.Info(err.Error())
+		log.Error(err.Error())
 		return nil, err
+	}
+	if len(bsResp.Choices) == 0 {
+		return nil, errors.New("no answer choise")
 	}
 	if q.ConversationId == "" {
 		q.ConversationId = uuid.New().String()
 	}
 	qa := common.QA{
 		Question:       q,
-		AnswerRole:     "assitant",
-		Answer:         bsResp.Response,
+		AnswerRole:     bsResp.Choices[0].Message.Role,
+		Answer:         bsResp.Choices[0].Message.Content,
 		MessageId:      uuid.NewString(),
 		ConversationId: q.ConversationId,
 		Model:          c.ModelName,
