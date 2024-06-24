@@ -83,6 +83,7 @@ type Service struct {
 	gptApiState      map[string]int                   //archived
 	gptApiClients    map[string]*chatapi.Client       //api-key -> client
 	bsApiClient      map[string][]*selfdriving.Client //modelname -> client
+	urls             map[string]int
 	relaysStateLock  sync.RWMutex
 	questionCh       chan (pendingQuestion)
 	maxPendingLength int
@@ -98,6 +99,7 @@ func InitRpcService(port string, relays []string, maxPendingLength int, bsModelC
 		RpcServer.maxPendingLength = maxPendingLength
 		RpcServer.gptApiClients = make(map[string]*chatapi.Client)
 		RpcServer.bsApiClient = make(map[string][]*selfdriving.Client)
+		RpcServer.urls = make(map[string]int)
 		RpcServer.relaysStateLock.Lock()
 		defer RpcServer.relaysStateLock.Unlock()
 		RpcServer.bsClientMut.Lock()
@@ -113,6 +115,7 @@ func InitRpcService(port string, relays []string, maxPendingLength int, bsModelC
 			for _, url := range urls {
 				log.Info("init model name:", modelName, "url:", url)
 				RpcServer.bsApiClient[modelName] = append(RpcServer.bsApiClient[modelName], selfdriving.NewClient(url, modelName, context.Background()))
+				RpcServer.urls[url] = 1
 			}
 		}
 	})
@@ -190,6 +193,13 @@ func (c *Service) Start(ctx context.Context) error {
 	r.POST("/api/fake", c.HandleFake)
 	r.POST("/api/question", c.HandleQuestion)
 	r.POST("/api/register", c.HandleRegister)
+	r.POST("/api/register_worker", c.HandleRegisterWorker)
+	r.POST("/api/receive_heart_beat", c.HandleSendHeartBeat)
+	r.POST("/api/get_worker_address", c.HandleGetWorkerAddress)
+	r.POST("/api/refresh_all_workers", c.HandleRefreshAllWorkers)
+	r.POST("/api/list_language_models", c.HandleListModels)
+	r.POST("/api/list_multimodal_models", c.HandleListMultiModals)
+	r.POST("/api/worker_get_status", c.HandleWorkerGetStatus)
 	r.GET("/api/refresh", func(c *gin.Context) {
 		defer func() {
 			c.String(http.StatusOK, "success")
@@ -397,7 +407,7 @@ func (s *Service) HandleRegister(c *gin.Context) {
 		if rep.ResultCode == Success {
 			c.JSON(http.StatusOK, rep)
 		} else {
-			c.JSON(http.StatusInternalServerError, rep)
+			c.JSON(rep.ResultCode, rep)
 		}
 	}()
 	req := WorkerRegReq{}
@@ -411,8 +421,134 @@ func (s *Service) HandleRegister(c *gin.Context) {
 		rep.ResultMsg = "model not supported yet"
 		return
 	}
+	if _, ok := s.urls[url]; ok {
+		rep.ResultCode = 403
+		rep.ResultMsg = "already regitered"
+		return
+	}
+	s.urls[url] = 1
 	s.bsApiClient[model] = append(s.bsApiClient[model], selfdriving.NewClient(url, model, context.TODO()))
 	rep.ResultMsg = "ok"
+}
+
+type FastChatWorkerStatus struct {
+	ModelNames  []string `json:"model_names"`
+	Speed       int      `json:"speed"`
+	QueueLength int      `json:"queue_length"`
+}
+
+type FastChatRegisterWorkerReq struct {
+	WorkerName     string               `json:"worker_name"`
+	CheckHeartBeat bool                 `json:"check_heart_beat"`
+	WorkerStatus   FastChatWorkerStatus `json:"worker_status"`
+	MultiModal     bool                 `json:"multimodal"`
+}
+
+func (s *Service) HandleRegisterWorker(c *gin.Context) {
+	rep := Resp{
+		ResultCode: 200,
+		ResultMsg:  "",
+		ResultBody: "",
+	}
+	defer func() {
+		if rep.ResultCode == Success {
+			c.JSON(http.StatusOK, rep)
+		} else {
+			c.JSON(http.StatusInternalServerError, rep)
+		}
+	}()
+	req := FastChatRegisterWorkerReq{}
+	c.BindJSON(&req)
+	s.bsClientMut.Lock()
+	defer s.bsClientMut.Unlock()
+	for _, model := range req.WorkerStatus.ModelNames {
+		url := req.WorkerName
+		if _, ok := s.bsApiClient[model]; !ok {
+			rep.ResultCode = 403
+			rep.ResultMsg = "model not supported yet"
+			return
+		}
+		if _, ok := s.urls[url]; ok {
+			continue
+		}
+		s.bsApiClient[model] = append(s.bsApiClient[model], selfdriving.NewClient(url, model, context.TODO()))
+	}
+	rep.ResultMsg = "ok"
+}
+
+type SendHeartBeatReq struct {
+	WorkerName  string `json:"worker_name"`
+	QueueLength int    `json:"queue_length"`
+}
+
+type SendHeartBeatResp struct {
+	Exist bool `json:"exist"`
+}
+
+func (s *Service) HandleSendHeartBeat(c *gin.Context) {
+	req := SendHeartBeatReq{}
+	c.BindJSON(&req)
+	_, exist := s.urls[req.WorkerName]
+	c.JSON(http.StatusOK, SendHeartBeatResp{exist})
+}
+
+type GetWorkerAddressReq struct {
+	Model string `json:"model"`
+}
+
+type GetWorkerAddressResp struct {
+	Address string `json:"address"`
+}
+
+func (s *Service) HandleGetWorkerAddress(c *gin.Context) {
+	req := GetWorkerAddressReq{}
+	c.BindJSON(&req)
+	s.bsClientMut.RLock()
+	defer s.bsClientMut.RUnlock()
+	addr := ""
+	bsClients, ok := s.bsApiClient[req.Model]
+	if !ok {
+		c.JSON(http.StatusOK, GetWorkerAddressResp{})
+		return
+	}
+	for _, cli := range bsClients {
+		if cli.Status == selfdriving.ModelAvalible {
+			addr = cli.Url
+			break
+		}
+	}
+	c.JSON(http.StatusOK, GetWorkerAddressResp{addr})
+}
+
+func (s *Service) HandleRefreshAllWorkers(c *gin.Context) {
+	c.JSON(http.StatusOK, "")
+}
+
+type ListModelsResp struct {
+	Models []string `json:"models"`
+}
+
+func (s *Service) HandleListModels(c *gin.Context) {
+	s.bsClientMut.RLock()
+	defer s.bsClientMut.RUnlock()
+	models := make([]string, 0)
+	for model, _ := range s.bsApiClient {
+		models = append(models, model)
+	}
+	c.JSON(http.StatusOK, ListModelsResp{models})
+}
+
+func (s *Service) HandleListMultiModals(c *gin.Context) {
+	c.JSON(http.StatusOK, ListModelsResp{[]string{}})
+}
+
+func (s *Service) HandleWorkerGetStatus(c *gin.Context) {
+	rep := Resp{
+		ResultCode: 200,
+		ResultMsg:  "",
+		ResultBody: "",
+	}
+	c.JSON(http.StatusOK, rep)
 }
 
 func (s *Service) HandleFake(c *gin.Context) {
